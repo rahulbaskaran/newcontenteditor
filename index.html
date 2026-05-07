@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Content Editor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; padding: 24px; color: #333; }
+  h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; color: #1a1a2e; }
+  p.desc { font-size: 0.85rem; color: #666; margin-bottom: 16px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .panels { display: flex; gap: 18px; }
+  .panel { flex: 1; display: flex; flex-direction: column; }
+  label { font-size: 0.78rem; font-weight: 600; color: #555; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.05em; display: block; }
+  textarea { width: 100%; height: 440px; font-family: 'Courier New', monospace; font-size: 0.74rem; border: 1.5px solid #ddd; border-radius: 8px; padding: 12px; resize: vertical; background: #fff; outline: none; transition: border-color 0.2s; line-height: 1.5; }
+  textarea:focus { border-color: #4f86f7; }
+  #output { background: #f8faff; }
+  .btn-row { display: flex; gap: 10px; margin: 14px 0; flex-wrap: wrap; align-items: center; }
+  button { padding: 10px 22px; border: none; border-radius: 7px; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  #processBtn { background: #4f86f7; color: #fff; }
+  #processBtn:hover { background: #3a6fd8; }
+  #copyBtn { background: #28a745; color: #fff; }
+  #copyBtn:hover { background: #1e7e34; }
+  #clearBtn { background: #e9ecef; color: #555; }
+  #clearBtn:hover { background: #d3d6da; }
+  .stats { font-size: 0.77rem; color: #888; margin-top: 6px; min-height: 18px; }
+  .rules-box { background: #fff; border: 1.5px solid #e2e8f0; border-radius: 8px; padding: 13px 16px; margin-bottom: 16px; font-size: 0.8rem; color: #555; line-height: 1.75; }
+  .rules-box strong { color: #222; }
+  code { background: #eef2ff; color: #4f46e5; border-radius: 4px; padding: 1px 6px; font-size: 0.78rem; font-family: 'Courier New', monospace; }
+  .toast { display: none; background: #333; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 0.8rem; margin-left: 10px; }
+  .toast.show { display: inline-block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Email Content Editor</h1>
+  <p class="desc">Paste your raw email source on the left, click <strong>Process</strong>, and get the transformed output on the right.</p>
+
+  <div class="rules-box">
+    <strong>Transformations applied:</strong><br>
+    1. All <code>&lt;/style&gt;</code> tags inside the content are <em>removed</em><br>
+    2. Everything after the last <code>&lt;/html&gt;</code> is replaced with <code>&lt;/style&gt;</code> — works whether a boundary line exists or not<br>
+    3. <code>From:</code> header (with or without quotes, with or without trailing spaces) → <code>From: {from} &lt;{listid}&gt;</code><br>
+    4. <code>To:</code> header → <code>To: {to}</code><br>
+    5. <code>Date:</code> header → <code>Date: {hdt}</code><br>
+    6. <code>Subject:</code> header — handles both single-line and multi-line folded subjects → <code>Subject: {sub}</code>
+  </div>
+
+  <div class="btn-row">
+    <button id="processBtn" onclick="processContent()">Process</button>
+    <button id="copyBtn" onclick="copyOutput()">Copy Output</button>
+    <button id="clearBtn" onclick="clearAll()">Clear All</button>
+    <span class="toast" id="toast">Copied!</span>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <label>Input — Paste raw email here</label>
+      <textarea id="input" placeholder="Paste your raw email source here..."></textarea>
+      <div class="stats" id="inStats"></div>
+    </div>
+    <div class="panel">
+      <label>Output — Processed result</label>
+      <textarea id="output" readonly placeholder="Processed output will appear here after clicking Process..."></textarea>
+      <div class="stats" id="outStats"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function processContent() {
+    let text = document.getElementById('input').value;
+    if (!text.trim()) {
+      alert('Please paste email content first.');
+      return;
+    }
+
+    let result = text;
+
+    // STEP 1: Remove all </style> tags
+    const styleCount = (result.match(/<\/style>/gi) || []).length;
+    result = result.replace(/<\/style>/gi, '');
+
+    // STEP 2: Find last </html> and replace everything after it with </style>
+    const htmlCloseIdx = result.toLowerCase().lastIndexOf('</html>');
+    if (htmlCloseIdx !== -1) {
+      result = result.substring(0, htmlCloseIdx + 7) + '\n</style>';
+    } else {
+      result = result.trimEnd() + '\n</style>';
+    }
+
+    // STEP 3: Replace From: header line
+    // KEY FIX: Added \s* at the end (before line end anchor) to handle
+    // trailing spaces like: From: "Name" <email@domain> [trailing space here]
+    // Pattern breakdown:
+    //   ^From: \s*        - "From:" optionally followed by spaces
+    //   (?:"[^"]*"|...)   - quoted name OR unquoted name
+    //   \s*<[^>]+>        - the <email> part (with optional space before it)
+    //   \s*$              - allow trailing whitespace before end of line
+    result = result.replace(/^From:\s*(?:"[^"]*"|[^<\r\n]+?)\s*<[^>]+>\s*$/m, 'From: {from} <{listid}>');
+
+    // STEP 4: Replace To: header line (also trim trailing spaces)
+    result = result.replace(/^To:\s*(?!\{to\})[^\r\n]+?[\t ]*$/m, 'To: {to}');
+
+    // STEP 5: Replace Date: header line (also trim trailing spaces)
+    result = result.replace(/^Date:\s*(?!\{hdt\})[^\r\n]+?[\t ]*$/m, 'Date: {hdt}');
+
+    // STEP 6: Replace Subject: header — handles multi-line folded subjects
+    // Continuation lines begin with at least one space or tab (RFC 2822 folding)
+    result = result.replace(/^Subject:\s*(?!\{sub\})[^\r\n]*(?:\r?\n[ \t][^\r\n]*)*/m, 'Subject: {sub}');
+
+    document.getElementById('output').value = result;
+    document.getElementById('inStats').textContent = `Input: ${text.length.toLocaleString()} chars`;
+    document.getElementById('outStats').textContent =
+      `Output: ${result.length.toLocaleString()} chars  |  </style> removed: ${styleCount}`;
+  }
+
+  function copyOutput() {
+    const out = document.getElementById('output');
+    if (!out.value) { alert('Nothing to copy yet. Click Process first.'); return; }
+    navigator.clipboard.writeText(out.value).then(() => {
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2000);
+    }).catch(() => { out.select(); document.execCommand('copy'); });
+  }
+
+  function clearAll() {
+    document.getElementById('input').value = '';
+    document.getElementById('output').value = '';
+    document.getElementById('inStats').textContent = '';
+    document.getElementById('outStats').textContent = '';
+  }
+
+  document.getElementById('input').addEventListener('input', function () {
+    document.getElementById('inStats').textContent = `Input: ${this.value.length.toLocaleString()} chars`;
+  });
+</script>
+</body>
+</html>
