@@ -39,12 +39,13 @@
 
   <div class="rules-box">
     <strong>Transformations applied:</strong><br>
-    1. All <code>&lt;/style&gt;</code> tags inside the content are <em>removed</em><br>
-    2. Everything after the last <code>&lt;/html&gt;</code> is replaced with <code>&lt;/style&gt;</code> — works whether a boundary line exists or not<br>
-    3. <code>From:</code> header (with or without quotes, with or without trailing spaces) → <code>From: {from} &lt;{listid}&gt;</code><br>
-    4. <code>To:</code> header → <code>To: {to}</code><br>
-    5. <code>Date:</code> header → <code>Date: {hdt}</code><br>
-    6. <code>Subject:</code> header — handles both single-line and multi-line folded subjects → <code>Subject: {sub}</code>
+    1. Finds whichever of <code>From:</code> / <code>Subject:</code> / <code>To:</code> / <code>Date:</code> appears <em>first</em> in the content — removes everything above that line<br>
+    2. All <code>&lt;/style&gt;</code> tags inside the content are <em>removed</em><br>
+    3. Everything after the last <code>&lt;/html&gt;</code> is replaced with <code>&lt;/style&gt;</code><br>
+    4. <code>From:</code> header → <code>From: {from} &lt;{listid}&gt;</code><br>
+    5. <code>To:</code> header → <code>To: {to}</code><br>
+    6. <code>Date:</code> header → <code>Date: {hdt}</code><br>
+    7. <code>Subject:</code> header (single or multi-line folded) → <code>Subject: {sub}</code>
   </div>
 
   <div class="btn-row">
@@ -78,11 +79,39 @@
 
     let result = text;
 
-    // STEP 1: Remove all </style> tags
+    // ── STEP 1: Find earliest of From / Subject / To / Date header lines ──────
+    // We look for each header's position in the text (line start, case-sensitive)
+    // and keep the one that appears earliest. Then we chop everything before it.
+
+    const headerPatterns = [
+      /^From:\s*/m,
+      /^Subject:\s*/m,
+      /^To:\s*/m,
+      /^Date:\s*/m,
+    ];
+
+    let earliestIndex = -1;
+
+    for (const pattern of headerPatterns) {
+      const match = pattern.exec(result);
+      if (match !== null) {
+        if (earliestIndex === -1 || match.index < earliestIndex) {
+          earliestIndex = match.index;
+        }
+      }
+    }
+
+    let removedAbove = false;
+    if (earliestIndex > 0) {
+      result = result.substring(earliestIndex);
+      removedAbove = true;
+    }
+
+    // ── STEP 2: Remove all </style> tags ──────────────────────────────────────
     const styleCount = (result.match(/<\/style>/gi) || []).length;
     result = result.replace(/<\/style>/gi, '');
 
-    // STEP 2: Find last </html> and replace everything after it with </style>
+    // ── STEP 3: Find last </html> and replace everything after it with </style>
     const htmlCloseIdx = result.toLowerCase().lastIndexOf('</html>');
     if (htmlCloseIdx !== -1) {
       result = result.substring(0, htmlCloseIdx + 7) + '\n</style>';
@@ -90,30 +119,23 @@
       result = result.trimEnd() + '\n</style>';
     }
 
-    // STEP 3: Replace From: header line
-    // KEY FIX: Added \s* at the end (before line end anchor) to handle
-    // trailing spaces like: From: "Name" <email@domain> [trailing space here]
-    // Pattern breakdown:
-    //   ^From: \s*        - "From:" optionally followed by spaces
-    //   (?:"[^"]*"|...)   - quoted name OR unquoted name
-    //   \s*<[^>]+>        - the <email> part (with optional space before it)
-    //   \s*$              - allow trailing whitespace before end of line
+    // ── STEP 4: Replace From: header ──────────────────────────────────────────
+    // Handles trailing spaces after closing >
     result = result.replace(/^From:\s*(?:"[^"]*"|[^<\r\n]+?)\s*<[^>]+>\s*$/m, 'From: {from} <{listid}>');
 
-    // STEP 4: Replace To: header line (also trim trailing spaces)
+    // ── STEP 5: Replace To: header ────────────────────────────────────────────
     result = result.replace(/^To:\s*(?!\{to\})[^\r\n]+?[\t ]*$/m, 'To: {to}');
 
-    // STEP 5: Replace Date: header line (also trim trailing spaces)
+    // ── STEP 6: Replace Date: header ──────────────────────────────────────────
     result = result.replace(/^Date:\s*(?!\{hdt\})[^\r\n]+?[\t ]*$/m, 'Date: {hdt}');
 
-    // STEP 6: Replace Subject: header — handles multi-line folded subjects
-    // Continuation lines begin with at least one space or tab (RFC 2822 folding)
+    // ── STEP 7: Replace Subject: header (handles multi-line folded) ───────────
     result = result.replace(/^Subject:\s*(?!\{sub\})[^\r\n]*(?:\r?\n[ \t][^\r\n]*)*/m, 'Subject: {sub}');
 
     document.getElementById('output').value = result;
     document.getElementById('inStats').textContent = `Input: ${text.length.toLocaleString()} chars`;
     document.getElementById('outStats').textContent =
-      `Output: ${result.length.toLocaleString()} chars  |  </style> removed: ${styleCount}`;
+      `Output: ${result.length.toLocaleString()} chars  |  Removed above header: ${removedAbove ? 'Yes ✓' : 'Nothing to remove'}  |  </style> removed: ${styleCount}`;
   }
 
   function copyOutput() {
